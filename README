@@ -1,1 +1,36 @@
-Performance framework scripts
+Setting up the environment:
+------------------------------------
+* Create a local repository which will hold all the logs.
+* Also create the directories mentioned in gf_perf_config
+[Some of them do get created if not present, but some are not]
+
+Building and deploying GlusterFS
+------------------------------------
+* Populate the BRICKS variable in gf_perf_config
+* If you want to deploy a tarball, update the tarball in gf_perf_config
+and then run "deploy_gluster". This will copy the tarball to all the bricks and
+will build it there. This uses a script called buildit, which I have provided as
+part of the scripts tarball.
+
+Running the tests
+------------------------------------
+* Use start_perf_measure to run the tests. The test run details can be changed
+in gf_perf_config before the run. You can specify whether the configuration is
+a distribute, replicate or distributed-replicate (distrep).
+* This will generate statistics in the log_repo for the current run under the
+director - "$log_repo/<current run>
+
+Analyzing the output
+------------------------------------
+* Use analyze_perf_measure to generate plots of CPU/VM utilization for all the
+bricks and the client.
+
+Running Quota and Gsync combinations:
+------------------------------------
+* After an initial run (as described above) is complete, you can run different
+combinations of Quota/Gsync by running quota_gsync_run.
+* NOTE: Before running this script, it is important to comment out the line -
+./create_gluster_vol in the script start_perf_measure.
+Otherwise, a new volume will be created for every combination, which we don't
+desire. I have not tested this setup with a new volume fore every combination.
+Theoretically, it should not cause any trouble. You can give it a shot.
