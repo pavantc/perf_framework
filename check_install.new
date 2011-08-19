@@ -1,0 +1,33 @@
+#!/bin/bash -ue
+
+source gf_perf_config
+
+gluster_build_dir=`tar tvf $RELEASE_TARBALL | head -1 | awk '{print $NF}'`
+def_gfd_loc=/usr/local/sbin/glusterfsd
+
+echo "Checking server installation"
+for brick in $BRICK_IP_ADDRS
+do
+	build_file_cksum=`ssh -l root $brick "cksum $SERVER_BUILD_DIR/$gluster_build_dir/glusterfsd/src/.libs/glusterfsd" | cut -f1 -d' '`
+	current_installed_file_cksum=`ssh -l root $brick cksum $def_gfd_loc | cut -f1 -d' '`
+	if [ "$build_file_cksum" != "$current_installed_file_cksum" ]
+	then
+		echo "Checksum on $brick do not match. Aborting..."
+		exit 1
+	else
+		echo "Checksum on $brick OK"
+	fi
+done
+
+echo ""
+echo "Checking client installation"
+build_file_cksum=`cksum $CLIENT_BUILD_DIR/$gluster_build_dir/glusterfsd/src/.libs/glusterfsd | cut -f1 -d' '`
+current_installed_file_cksum=`cksum $def_gfd_loc | cut -f1 -d' '`
+
+if [ "$build_file_cksum" != "$current_installed_file_cksum" ]
+then
+	echo "Checksum on client do not match. Aborting..."
+	exit 1
+else
+	echo "Checksum on client OK"
+fi

@@ -1,0 +1,6 @@
+#!/bin/bash
+
+./autogen.sh > autogen.out.remote 2> autogen.err.remote
+./configure > configure.out.remote 2> configure.err.remote
+make > make.out.remote 2> make.err.remote
+make install > make_install.out.remote 2> make_install.err.remote

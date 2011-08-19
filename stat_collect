@@ -1,0 +1,36 @@
+#!/bin/bash -ue
+
+function start_stat_collect()
+{
+        echo "Interrupts details:" >> $SYSINFO
+        cat /proc/interrupts >> $SYSINFO
+        echo "CPU details:" >> $SYSINFO
+        cat /proc/cpuinfo >> $SYSINFO
+        echo "Memory details:" >> $SYSINFO
+        cat /proc/meminfo >> $SYSINFO
+        
+        iostat -xcdh 5 >> $IOSTAT_LOG &
+        mpstat -P ALL 5 >> $MPSTAT_LOG &
+        vmstat 5 >> $VMSTAT_LOG &
+	LC_TIME="POSIX" sar -n DEV 5 0 >> $SAR_NETSTAT_LOG &
+}
+
+function init()
+{
+        mkdir -p $LOGDIR
+        IOSTAT_LOG=$LOGDIR/iostat_log
+        VMSTAT_LOG=$LOGDIR/vmstat_log
+        MPSTAT_LOG=$LOGDIR/mpstat_log
+	SAR_NETSTAT_LOG=$LOGDIR/sar_netstat_log
+        SYSINFO=$LOGDIR/sysinfo
+        echo "" > $IOSTAT_LOG
+        echo "" > $VMSTAT_LOG
+        echo "" > $MPSTAT_LOG
+	echo "" > $SAR_NETSTAT_LOG
+        echo "" > $SYSINFO
+}
+
+LOGDIR=$1
+init $LOGDIR;
+start_stat_collect;
+wait

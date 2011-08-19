@@ -1,0 +1,466 @@
+#!/bin/bash -u
+
+source gf_perf_config
+
+if [ $# -le 0 -o $# -gt 2 ]
+then
+	echo "Usage : $0 <run directory>"
+	exit 1
+fi
+
+rundir=$1
+cmpdir=""
+
+if [ $# -eq 2 ]
+then
+	cmpdir=$2
+fi
+
+function gen_cpu_data()
+{
+	time=0
+	sum=0
+	
+	if [ -f times ]
+	then
+	        rm times
+	fi
+	
+	for op in `cat ops`
+	do
+	        time=0;
+	        for i in `grep -w ^$op $PERFLOG | awk '{print $2}'| cut -f1 -d'.'`
+	        do
+	                time=$((time+$i))
+	        done;
+	        time=$((time/3)) # Average over three runs
+	        sum=$((sum + $time))
+	        echo $sum >> times
+	done
+	sed -i 's/$/  100/g' times
+	
+	num_procs=`grep -w ^processor $SYSINFO | wc -l`
+	echo `grep idle $MPSTAT_LOG | head -1 | awk '{print $NF}'` | grep -o idle
+	idle_col_tweak=$?
+	echo `grep CPU $MPSTAT_LOG | head -1 | awk '{print $3}'` | grep -o CPU > /dev/null
+	cpu_col_tweak=$?
+	for i in "all" 0 `seq $((num_procs-1))`
+	do
+	        egrep -v 'Linux|^$|idle' $MPSTAT_LOG | awk -v v1=$cpu_col_tweak -v v2=$idle_col_tweak '{print $(3-v1) " " $(NF-v2)}' | grep -w ^$i | cut -f 2 -d' '| sed 's/^/100-/g' | bc -l > cpu-$i;
+	        cat -n cpu-$i > cpu-$i.new
+	done
+}
+
+function plot_cpu_usage()
+{
+	xrange=$((`tail -1 times | awk '{print $1}'`+50))
+	mpstat_interval=5
+        plot_info=pinfo.$$
+        num_procs=`grep -w ^processor $SYSINFO | wc -l`
+        ltype=1
+	identity=$1
+	
+        for i in "all" 0 `seq $((num_procs-1))`
+        do
+                echo -ne "\"cpu-$i.new\" using (\$1*$mpstat_interval):2 title 'cpu-$i' with lines lt $ltype lw 2,\\c" >> $plot_info
+                ltype=$((ltype+1))
+        done
+        echo "\"times\" using 1:2 title '' with impulse lt 2 lw 1" >> $plot_info
+
+	gnuplot <<EOF
+	set autoscale 
+	set grid
+	set title "CPU utilization : All CPUs ($identity)"
+	set xlabel "Time"
+	set ylabel "% CPU utilization"
+	set xr [0:$xrange]
+	set yr [0:100]
+	set terminal png nocrop size 1024,768
+	set output "$CPU_PLOT_OUTPUT"
+        plot `cat $plot_info`
+EOF
+        rm $plot_info
+}
+
+function gen_vm_data()
+{
+	egrep -v 'memory|free|^$' $VMSTAT_LOG  | awk '{print $4}' > vm_datafile
+	totalmem=`grep -w ^MemTotal $SYSINFO | awk '{print $2}'`
+	cat vm_datafile | sed "s/^/$totalmem-/g" | bc > memfile
+	cat -n memfile > memfile.new
+}
+
+function plot_vm_usage()
+{
+	vmstat_interval=5
+	total_mem=`grep -w ^MemTotal $SYSINFO | awk '{print $2}'`
+	xrange=$((`tail -1 times | awk '{print $1}'`+50))
+	identity=$1
+	
+	gnuplot <<EOF
+	set autoscale 
+	set grid
+	set title "Memory utilization ($identity)"
+	set xlabel "Time"
+	set ylabel "Memory utilization in bytes"
+	set xr [0:$xrange]
+	set yr [0:$total_mem]
+	set terminal png nocrop size 1024,768
+	set output "$VM_PLOT_OUTPUT"
+	plot  "memfile.new" using (\$1*$vmstat_interval):2 title 'memory-usage' with lines lt 2 lw 2,\
+	      "times" using 1:(\$2*$total_mem/100) title '' with impulse lt 2 lw 1
+EOF
+}
+
+function gen_iostats()
+{
+        brick=$1
+        dev=`ssh $brick "df -h $SERVER_EXPORT_DIR" | tail -1 | awk '{print $1}' | cut -f3 -d'/'`
+	egrep -v 'Device|^$' $IOSTAT_LOG |grep -w ^$dev | awk '{print $10}' | cut -f1 -d'.' > io_await
+	cat -n io_await > io_await.new
+	egrep -v 'Device|^$' $IOSTAT_LOG |grep -w ^$dev | awk '{print $6}' | cut -f1 -d'.' > read_tput
+	cat -n read_tput > read_tput.new
+	egrep -v 'Device|^$' $IOSTAT_LOG |grep -w ^$dev | awk '{print $7}' | cut -f1 -d'.' > write_tput
+	cat -n write_tput > write_tput.new
+}
+
+function plot_iostats()
+{
+	iostat_interval=5
+	max_wait=$((`sort -n io_await | tail -1` + 50))
+	max_read=$(((`sort -n read_tput | tail -1`) / 2 + 100))
+	max_write=$(((`sort -n write_tput | tail -1`) / 2 + 100))
+        max_io=$max_write
+        if [ $max_read -gt $max_write ]
+        then
+                max_io=$max_read;
+        fi
+	xrange=$((`tail -1 times | awk '{print $1}'`+50))
+	identity=$1
+	
+	gnuplot <<EOF1
+	set autoscale 
+	set grid
+	set title "IO Wait times ($identity)"
+	set xlabel "Time in seconds"
+	set ylabel "IO Wait times in milliseconds"
+	set xr [0:$xrange]
+	set yr [0:$max_wait]
+	set terminal png nocrop size 1024,768
+	set output "$IO_TIMES_PLOT_OUTPUT"
+	plot  "io_await.new" using (\$1*$iostat_interval):2 title 'IO wait times' with lines lt 3 lw 2,\
+	      "times" using 1:(\$2*$max_wait/100) title '' with impulse lt 2 lw 1
+EOF1
+	gnuplot <<EOF2
+	set autoscale 
+	set grid
+	set title "Disk Read-Write throughput ($identity)"
+	set xlabel "Time in seconds"
+	set ylabel "Throughput in KB/sec"
+	set xr [0:$xrange]
+	set yr [0:$max_io]
+	set terminal png nocrop size 1024,768
+	set output "$IO_TPUT_PLOT_OUTPUT"
+	plot  "read_tput.new" using (\$1*$iostat_interval):(\$2/2) title 'Read throughput' with lines lt 4 lw 2,\
+	      "write_tput.new" using (\$1*$iostat_interval):(\$2/2) title 'Write throughput' with lines lt 5 lw 2,\
+	      "times" using 1:(\$2*$max_io/100) title '' with impulse lt 2 lw 1
+EOF2
+}
+
+function gen_cmp_data()
+{
+	perflog_baseline=$1
+	perflog_current=$2
+	
+	time=0
+	for op in `cat ops`
+	do
+	        time=0;
+	        for i in `grep -w ^$op $perflog_baseline | awk '{print $2}'| cut -f1 -d'.'`
+	        do
+	                time=$((time+$i))
+	        done;
+	        time=$((time/3)) # Average over three runs
+	        echo $time >> btimes.$$
+	done
+	
+	for op in `cat ops`
+	do
+	        time=0;
+	        for i in `grep -w ^$op $perflog_current | awk '{print $2}'| cut -f1 -d'.'`
+	        do
+	                time=$((time+$i))
+	        done;
+	        time=$((time/3)) # Average over three runs
+	        echo $time >> ctimes.$$
+	done
+	
+	paste -d " " ops btimes.$$ ctimes.$$ > $CMP_DATAFILE
+	rm btimes.$$ ctimes.$$
+}
+
+function plot_comparison()
+{
+	a=`cat $CMP_DATAFILE | awk '{print $2"\n"$3}' | sort -n | tail -1`
+	yrange=`echo $a + $a/5 | bc`
+	b=`wc -l $CMP_DATAFILE | awk '{print $1}'`
+	xrange=`echo $b - 0.5 | bc` 
+	
+	gnuplot <<EOF
+	reset
+	set key at graph 0.15, 0.85 horizontal samplen 0.1
+	set style data histogram
+	set style histogram cluster gap 1
+	set style fill solid border -1
+	set boxwidth 0.8
+	set xtic rotate by 90 scale 0
+	unset ytics
+	set y2tics rotate by 90
+	set terminal png nocrop size 1024,768
+	set xlabel ' '
+	set size 0.6, 1
+	set yrange [0:$yrange]; set xrange [-0.5:$xrange]
+	set y2label '$XLABEL' offset -2
+	set label 1 '$YLABEL' at graph 0.5, -0.4 centre rotate by 180
+	set label 2 '$LEGEND_A' at graph 0.05, 0.85 left rotate by 90
+	set label 3 '$LEGEND_B' at graph 0.12, 0.85 left rotate by 90
+	set label 4 '$PLOT_TITLE' at graph -0.01, 0.5 center rotate by 90
+	set output "tmp.$$.png"
+	p '$CMP_DATAFILE' u 2 title ' ', '' u 3 title ' ', '' u 0:(0):xticlabel(1) w l title ''
+EOF
+        convert tmp.$$.png -rotate 90 $CMP_PLOT_OUTPUT
+        rm tmp.$$.png
+}
+
+function gen_intr_csw_stats()
+{
+	egrep -v 'memory|free|^$' $VMSTAT_LOG | awk '{print $11}' > intrstat
+	cat -n intrstat > intrstat.new
+	egrep -v 'memory|free|^$' $VMSTAT_LOG | awk '{print $12}' > cswstat
+	cat -n cswstat > cswstat.new
+}
+
+function plot_intr_csw_stats()
+{
+	vmstat_interval=5
+	xrange=$((`tail -1 times | awk '{print $1}'` + 50))
+	max_intr=$((`sort -n intrstat | tail -1` + 100))
+	max_csw=$((`sort -n cswstat | tail -1` + 100))
+        max_val=$max_csw
+        if [ $max_intr -gt $max_csw ]
+        then
+                max_val=$max_intr;
+        fi
+	identity=$1
+	
+	gnuplot <<EOF
+	set autoscale 
+	set grid
+	set title "Interrupts and context switches ($identity)"
+	set xlabel "Time in seconds"
+	set ylabel "Interrupts/Context Switches"
+	set xr [0:$xrange]
+	set yr [0:$max_val]
+	set terminal png nocrop size 1024,768
+	set output "$INTR_CSW_PLOT_OUTPUT"
+	plot  "intrstat.new" using (\$1*$vmstat_interval):2 title 'Interrupts' with lines lt 4 lw 2,\
+	      "cswstat.new" using (\$1*$vmstat_interval):2 title 'Context Switches' with lines lt 5 lw 2,\
+	      "times" using 1:(\$2*$max_val/100) title '' with impulse lt 2 lw 1
+EOF
+}
+
+function gen_netstats()
+{
+	ip_addr=$1
+        dev=`ssh $ip_addr ifconfig | grep -B1 $ip_addr | head -1 | cut -f1 -d' '`
+        egrep -v 'IFACE|^$' $SAR_NETSTAT_LOG |grep -w $dev | awk '{print $3}' | cut -f1 -d'.' > rpkts
+        cat -n rpkts > rpkts.new
+        egrep -v 'IFACE|^$' $SAR_NETSTAT_LOG |grep -w $dev | awk '{print $4}' | cut -f1 -d'.' > wpkts
+        cat -n wpkts > wpkts.new
+        egrep -v 'IFACE|^$' $SAR_NETSTAT_LOG |grep -w $dev | awk '{print $5}' | cut -f1 -d'.' > rkbytes
+        cat -n rkbytes > rkbytes.new
+        egrep -v 'IFACE|^$' $SAR_NETSTAT_LOG |grep -w $dev | awk '{print $6}' | cut -f1 -d'.' > wkbytes
+        cat -n wkbytes > wkbytes.new
+}
+
+function plot_netstats()
+{
+        sar_netstat_interval=5
+        max_read_pkts=$((`sort -n rpkts | tail -1` + 50))
+        max_write_pkts=$((`sort -n wpkts | tail -1` + 50))
+        max_read_kbytes=$(((`sort -n rkbytes | tail -1`)/1024 + 100))
+        max_write_kbytes=$(((`sort -n wkbytes | tail -1`)/1024 + 100))
+
+        max_pkts=$max_write_pkts
+        if [ $max_read_pkts -gt $max_write_pkts ]
+        then   
+                max_pkts=$max_read_pkts;
+        fi
+
+        max_kbytes=$max_write_kbytes
+        if [ $max_read_kbytes -gt $max_write_kbytes ]
+        then   
+                max_kbytes=$max_read_kbytes;
+        fi
+        xrange=$((`tail -1 times | awk '{print $1}'`+50))
+        identity=$1
+
+        gnuplot <<EOF1
+        set autoscale
+        set grid
+        set title "Network statistics - Packet Read/Write ($identity)"
+        set xlabel "Time in seconds"
+        set ylabel "Number of Packets"
+        set xr [0:$xrange]
+        set yr [0:$max_pkts]
+        set terminal png nocrop size 1024,768
+        set output "$NET_PKTS_PLOT_OUTPUT"
+        plot  "rpkts.new" using (\$1*$sar_netstat_interval):2 title 'Read Packets' with lines lt 3 lw 2,\
+              "wpkts.new" using (\$1*$sar_netstat_interval):2 title 'Write Packets' with lines lt 4 lw 2,\
+              "times" using 1:(\$2*$max_pkts/100) title '' with impulse lt 2 lw 1
+EOF1
+        gnuplot <<EOF2
+        set autoscale
+        set grid
+        set title "Network Read-Write throughput ($identity)"
+        set xlabel "Time in seconds"
+        set ylabel "Throughput in KB/sec"
+        set xr [0:$xrange]
+        set yr [0:$max_kbytes]
+        set terminal png nocrop size 1024,768
+        set output "$NET_TPUT_PLOT_OUTPUT"
+        plot  "rkbytes.new" using (\$1*$sar_netstat_interval):(\$2/1024) title 'Read throughput' with lines lt 3 lw 2,\
+              "wkbytes.new" using (\$1*$sar_netstat_interval):(\$2/1024) title 'Write throughput' with lines lt 4 lw 2,\
+              "times" using 1:(\$2*$max_kbytes/100) title '' with impulse lt 2 lw 1
+EOF2
+}
+
+function analyse_plot_data()
+{
+	identity=$1
+
+	if [ $identity != "client" ]
+	then
+        	brick=$2
+	fi
+	# Generate CPU data
+	gen_cpu_data
+	# plot CPU data
+	plot_cpu_usage $identity
+
+	# Generate VM data
+	gen_vm_data
+	# plot VM data
+	plot_vm_usage $identity
+
+	if [ $identity != "client" ]
+	then
+		# Generate io-times and io-throughput data
+		# This makes sense only for the bricks since the client is not involved in disk IO
+		gen_iostats $brick
+		# plot io-times and io-throughput data
+		plot_iostats $identity
+	fi
+
+        # Generate interrupt and context switch data
+        gen_intr_csw_stats
+        # plot interrupt and context switch data
+        plot_intr_csw_stats $identity
+
+	# Generate network packet statistics and throughput data
+	if [ $identity != "client" ]
+	then
+		gen_netstats $brick
+	else
+		gen_netstats $CLIENT_IP_ADDR
+	fi
+	# Generate network packet statistics and throughput data
+	plot_netstats $identity
+
+	# cleanup tmp files
+	rm vm_datafile memfile*
+	rm cpu-* times
+	if [ $identity != "client" ]
+	then
+		rm io_await* read_tput* write_tput*
+	fi
+	rm cswstat* intrstat*
+	rm rpkts* wpkts* rkbytes* wkbytes*
+}
+
+function analyse_client_data()
+{
+	MPSTAT_LOG=$rundir/client/mpstat_log
+	VMSTAT_LOG=$rundir/client/vmstat_log
+	IOSTAT_LOG=$rundir/client/iostat_log
+	SAR_NETSTAT_LOG=$rundir/client/sar_netstat_log
+	SYSINFO=$rundir/client/sysinfo
+	PERFLOG=$rundir/client/perf-test.log
+	CPU_PLOT_OUTPUT=$rundir/client/cpu.png
+	VM_PLOT_OUTPUT=$rundir/client/vm.png
+        IO_TIMES_PLOT_OUTPUT=$rundir/client/io_times.png
+        IO_TPUT_PLOT_OUTPUT=$rundir/client/io_tput.png
+        INTR_CSW_PLOT_OUTPUT=$rundir/client/intr_csw.png
+	NET_PKTS_PLOT_OUTPUT=$rundir/client/net-pkts.png
+	NET_TPUT_PLOT_OUTPUT=$rundir/client/net-tput.png
+	identity="client"
+	analyse_plot_data $identity
+}
+
+function analyse_brick_data()
+{
+	ind=0
+	for b in $BRICK_IP_ADDRS
+	do
+		ind=$((ind+1))
+		MPSTAT_LOG=$rundir/brick$ind*mpstat-log
+		VMSTAT_LOG=$rundir/brick$ind*vmstat-log
+		IOSTAT_LOG=$rundir/brick$ind*iostat-log
+		SAR_NETSTAT_LOG=$rundir/brick$ind-*sar_netstat-log
+		SYSINFO=$rundir/brick$ind*sysinfo-log
+		PERFLOG=$rundir/client/perf-test.log
+		CPU_PLOT_OUTPUT=$rundir/brick$ind-cpu.png
+		VM_PLOT_OUTPUT=$rundir/brick$ind-vm.png
+                IO_TIMES_PLOT_OUTPUT=$rundir/brick$ind-io_times.png
+                IO_TPUT_PLOT_OUTPUT=$rundir/brick$ind-io_tput.png
+                INTR_CSW_PLOT_OUTPUT=$rundir/brick$ind-intr_csw.png
+		NET_PKTS_PLOT_OUTPUT=$rundir/brick$ind-net-pkts.png
+		NET_TPUT_PLOT_OUTPUT=$rundir/brick$ind-net-tput.png
+
+		identity="brick$ind"
+		analyse_plot_data $identity $b
+	done
+}
+
+function do_comparison()
+{
+	# Generate comparison data
+	gen_cmp_data $1 $2
+
+	# plot perf comparison
+	plot_comparison
+}
+
+cp ops $LOCAL_LOG_REPO
+cd $LOCAL_LOG_REPO
+analyse_client_data
+analyse_brick_data
+rm ops
+
+if [ "$cmpdir" != "" ]
+then
+	CMP_PLOT_OUTPUT=$cmpdir-$rundir-cmp.png
+	CMP_DATAFILE=$rundir/client/cmp-with-$cmpdir-data.dat
+
+	XLABEL="Time in seconds"
+	YLABEL="Operations"
+	LEGEND_A="$cmpdir"
+	LEGEND_B="$rundir"
+	PLOT_TITLE="Performance comparison - $cmpdir vs $rundir"
+	do_comparison $cmpdir/client/perf-test.log $rundir/client/perf-test.log
+fi
+
+# Create tarball of the plots
+echo "Creating plots.tar..."
+cd $rundir
+tar cf plots.tar *.png client/*.png

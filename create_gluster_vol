@@ -1,0 +1,110 @@
+#!/bin/bash -ue
+
+CONFIG_FILE=gf_perf_config
+source $CONFIG_FILE
+GF_BIN=/usr/local/sbin
+
+function mgmt_vol_create()
+{
+        if [ $ENABLE_ACL == "yes" ]
+        then
+                ./acl on
+        else
+                ./acl off
+        fi
+	for brick in $BRICK_IP_ADDRS
+	do
+		ssh  -l root $MGMT_NODE "$GF_BIN/gluster peer probe $brick"
+	done
+        ssh -l root $MGMT_NODE "$@"
+	ssh -l root $MGMT_NODE "$GF_BIN/gluster volume start $VOLNAME"
+}
+
+function cleanup_brick()
+{
+        ssh -l root $1 "killall glusterd glusterfs glusterfsd > /dev/null 2>&1; rm -rf /etc/glusterd"
+
+	if [ "$SERVER_EXPORT_DIR" != "" ]
+	then
+        	echo "Deleting export dir $SERVER_EXPORT_DIR on $brick..."
+        	ssh -l root $1 "rm -rf $SERVER_EXPORT_DIR"
+	else
+        	echo "************* Empty export dir in config *************"
+		exit
+	fi
+}
+
+echo "Cleaning bricks..."
+for brick in $BRICK_IP_ADDRS
+do 
+        cleanup_brick $brick &
+done
+
+wait
+
+echo "Creating export directory..."
+for brick in $BRICK_IP_ADDRS
+do 
+        ssh -l root $brick "mkdir -p $SERVER_EXPORT_DIR"
+done
+
+# Start glusterd on all the bricks
+echo "Starting glusterd..."
+for brick in $BRICK_IP_ADDRS
+do 
+	if [ $ENABLE_MEM_ACCT == "yes" ]
+	then
+        	ssh -l root $brick "GLUSTERFS_DISABLE_MEM_ACCT=0 $GF_BIN/glusterd"
+	else
+        	ssh -l root $brick "$GF_BIN/glusterd"
+	fi
+done
+
+# Create the gluster volume according to the config
+
+bricklist=""
+count=0
+for brick in $BRICK_IP_ADDRS
+do 
+        bricklist+="$brick:$SERVER_EXPORT_DIR "
+        count=$((count+1))
+done
+
+if [ "$GF_CONFIG" == "replicate" -a "$count" -gt "2" ]
+then
+        echo "NOTE:"
+        echo "Replicate volume with more than 2 bricks created."
+        echo "This will result in a distributed replicate config."
+fi
+
+echo "Creating volume..."
+if [ "$GF_CONFIG" == "distribute" ]
+then
+        mgmt_vol_create "gluster volume create $VOLNAME $bricklist"
+elif [ "$GF_CONFIG" == "replicate" ]
+then
+        mgmt_vol_create "gluster volume create $VOLNAME replica 2 $bricklist"
+elif [ "$GF_CONFIG" == "distrep" ]
+then
+        mgmt_vol_create "gluster volume create $VOLNAME replica 2 $bricklist"
+else
+        echo "Unknown configuration. Exiting..."
+        exit 1
+fi
+
+sleep 5
+
+if [ $ENABLE_MEM_ACCT == "yes" ]
+then
+	for brick in $BRICK_IP_ADDRS
+	do 
+		echo "Memory accounting status on : $brick -"
+        	ssh -l root $brick "\
+                	echo \"x/x &gf_mem_acct_enable\" > gf_gdb_commands;\
+                	echo \"quit\" >> gf_gdb_commands;\
+                	gdb -q --command=gf_gdb_commands -p \`pidof glusterfsd\` 2> /dev/null | \
+                	grep gf_mem_acct_enable | awk '{print \$(NF-1) \$NF}';\
+                	rm gf_gdb_commands > /dev/null 2>&1"
+		echo ""
+	done
+fi

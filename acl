@@ -1,0 +1,42 @@
+#!/bin/bash
+
+source gf_perf_config
+
+function usage()
+{
+	echo "Usage: $0 <on|off>"
+	exit 1
+}
+
+function get_mount()
+{
+        brick=$1
+	export_dir=$2
+        ssh -l root $brick ls -d $export_dir > /dev/null
+	if [ $? -ne 0 ]
+	then
+		echo "FATAL : Export directory does not exist. Exiting..."
+		exit 1
+	fi
+        echo `ssh -l root $brick df -h $export_dir | grep -v ^Filesystem | awk '{print $NF}'`
+}
+	
+	
+if [ $# -ne 1 ]
+then
+	usage
+fi
+
+for brick in $BRICK_IP_ADDRS
+do
+	mount_point=`get_mount $brick $SERVER_EXPORT_DIR`
+	if [ "$1" == "on" ]
+	then
+		ssh -l root $brick mount -o remount,acl $mount_point
+	elif [ "$1" == "off" ]
+	then
+		ssh -l root $brick  mount -o remount,noacl $mount_point
+	else
+		usage
+	fi
+done

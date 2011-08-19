@@ -1,0 +1,159 @@
+#!/bin/bash -u
+
+CONFIG_FILE=gf_perf_config
+source $CONFIG_FILE
+
+SETTLE_TIME=10
+RUNFILE=.runfile
+STAT_COLLECTOR=stat_collect
+
+# Generate current run, update runfile
+if [ ! -f $RUNFILE ]
+then
+        run=1
+else
+        run=`cat $RUNFILE`
+fi
+echo $((run+1)) > $RUNFILE
+
+# Drop vm caches on all the bricks before starting the runs
+for brick in $BRICK_IP_ADDRS
+do
+        ssh -l root $brick "echo 3 > /proc/sys/vm/drop_caches"
+done
+
+# Create the gluster volume
+./create_gluster_vol
+
+mount | grep $MOUNT_POINT > /dev/null 2>&1
+if [ $? -eq 0 ]
+then
+	umount $MOUNT_POINT
+fi
+
+if [ ! -d $MOUNT_POINT ]
+then
+	mkdir -p $MOUNT_POINT
+fi
+
+# Make sure that the fuse kernel module is loaded
+/sbin/lsmod | grep -w fuse > /dev/null 2>&1
+if [ $? -ne 0 ]
+then
+	/sbin/modprobe fuse > /dev/null 2>&1
+fi
+
+ps -eaf | egrep -w 'glusterfs|glusterfsd|glusterd' > /dev/null 2>&1
+if [ $? -eq 0 ]
+then
+	killall glusterfsd glusterd glusterfs  > /dev/null 2>&1
+fi
+
+# Mount the client
+# Sleep for a while. Sometimes, NFS mounts fail if attempted soon after creating the volume
+sleep $SETTLE_TIME
+
+if [ $ENABLE_ACL == "yes" ]
+then
+        acl_opts="-o acl"
+else
+        acl_opts=""
+fi
+
+echo "Mounting volume..."
+if [ $ENABLE_MEM_ACCT == "yes" ]
+then
+	echo "Memory accounting status on client -"
+	echo "x/x &gf_mem_acct_enable" > commands.$$
+	echo "quit" >> commands.$$
+	GLUSTERFS_DISABLE_MEM_ACCT=0 mount -t $MOUNT_TYPE $acl_opts $MGMT_NODE:$VOLNAME $MOUNT_POINT
+	mount_status=$?
+	gdb -q --command=commands.$$ -p `pidof glusterfs` | grep gf_mem_acct_enable | awk '{print $(NF-1) $NF}'
+	rm commands.$$ > /dev/null 2>&1
+else
+	mount -t $MOUNT_TYPE $acl_opts $MGMT_NODE:$VOLNAME $MOUNT_POINT
+	mount_status=$?
+fi
+
+if [ $mount_status -ne 0 ]
+then
+        echo "mount -t $MOUNT_TYPE $acl_opts $MGMT_NODE:$VOLNAME $MOUNT_POINT failed..."
+        echo "Exiting..."
+        exit 1
+fi
+
+# Copy statistics collection scripts to the server
+
+echo ""
+echo "Copying stat collection script to bricks..."
+for brick in $BRICK_IP_ADDRS
+do 
+	ssh -l root $brick "mkdir -p $SERVER_SCRIPTS_DIR"
+	scp -p $STAT_COLLECTOR root@$brick:$SERVER_SCRIPTS_DIR > /dev/null 2>&1
+done
+
+# Run statistics collection scripts on the server
+
+echo ""
+echo "Starting server stat collection..."
+for brick in $BRICK_IP_ADDRS
+do 
+	ssh -l root $brick "mkdir -p $SERVER_LOG_DIR"
+	ssh -l root $brick "$SERVER_SCRIPTS_DIR/$STAT_COLLECTOR $SERVER_LOG_DIR" &
+done
+
+# Run statistics collection on client
+
+mkdir -p $LOCAL_LOG_REPO
+./$STAT_COLLECTOR $LOCAL_LOG_REPO/run$run/client &
+
+# Start perf test
+
+echo ""
+echo "Starting run $run..."
+
+sleep $SETTLE_TIME
+./perf.sh $MOUNT_POINT $LOCAL_LOG_REPO/run$run/client/perf-test.log
+sleep $SETTLE_TIME
+
+# Stop statistics collection scripts on the client
+
+killall mpstat vmstat iostat $STAT_COLLECTOR sar > /dev/null 2>&1
+
+# Stop statistics collection scripts on the server
+
+echo ""
+echo "Stopping server stat collection..."
+for brick in $BRICK_IP_ADDRS
+do 
+	ssh -l root $brick killall mpstat vmstat iostat $STAT_COLLECTOR sar > /dev/null 2>&1
+done
+
+# Since the ssh processes were backgrounded, they will be hanging around.
+# Kill them
+kill `jobs -l | awk '{print $2}'` > /dev/null 2>&1
+
+# Copy statistics from the server
+
+echo ""
+echo "Copying server logfiles for run $run..."
+cur_log_dump_dir=$LOCAL_LOG_REPO/run$run
+mkdir -p $cur_log_dump_dir
+count=1
+for brick in $BRICK_IP_ADDRS
+do
+        for statf in mpstat vmstat iostat sysinfo sar_netstat
+        do
+                scp root@$brick:$SERVER_LOG_DIR/*$statf* $cur_log_dump_dir/brick$count-$brick-$statf-log > /dev/null 2>&1
+        done
+        count=$((count + 1))
+done
+
+# Cleanup statistics collected for this run on the server
+
+echo ""
+echo "Cleaning server logfiles..."
+for brick in $BRICK_IP_ADDRS
+do 
+	ssh -l root $brick "cd $SERVER_LOG_DIR; rm mpstat_log vmstat_log iostat_log sysinfo sar_netstat_log"
+done

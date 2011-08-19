@@ -1,0 +1,25 @@
+#!/bin/bash -u
+
+TARBALL_DIR=./tarballs
+function usage()
+{
+	echo "Usage : $0 <gluster_release_tarball_list>"
+	exit 1
+}
+
+if [ $# -lt 1 ]
+then
+	usage
+fi
+
+list=`echo $@`
+for i in $list
+do
+	if [ ! -f $TARBALL_DIR/$i ]
+	then
+		echo "$i not found in directory $TARBALL_DIR. Provide correct list."
+		exit
+	fi
+done
+
+sed -i "s/^RUNLIST=.*$/RUNLIST=\"$list\"/" batchrun

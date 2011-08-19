@@ -1,0 +1,9 @@
+#!/bin/bash -u
+
+source gf_perf_config
+
+for brick in $BRICK_IP_ADDRS
+do
+	echo $brick
+	ssh -l root $brick "$@"
+done

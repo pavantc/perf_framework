@@ -1,0 +1,13 @@
+#!/bin/bash -ue
+
+source gf_perf_config
+
+gluster_build_dir=`tar tvf $RELEASE_TARBALL | head -1 | awk '{print $NF}'`
+def_gfd_loc=/usr/local/sbin/glusterfsd
+
+echo "Checking server installation"
+./run cksum $SERVER_BUILD_DIR/$gluster_build_dir/glusterfsd/src/.libs/glusterfsd $def_gfd_loc
+
+echo ""
+echo "Checking client installation"
+cksum $CLIENT_BUILD_DIR/$gluster_build_dir/glusterfsd/src/.libs/glusterfsd $def_gfd_loc

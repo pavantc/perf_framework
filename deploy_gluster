@@ -1,0 +1,53 @@
+#!/bin/bash
+
+function prepare_server()
+{
+	ip_addr=$1
+	ssh -l root $ip_addr mkdir -p $SERVER_BUILD_DIR
+	scp -p $RELEASE_TARBALL $BUILD_SCRIPT root@$ip_addr:$SERVER_BUILD_DIR
+	ssh -l root $ip_addr "cd $SERVER_BUILD_DIR && tar xf $RELEASE_TARBALL"
+	ssh -l root $ip_addr "cd $SERVER_BUILD_DIR/$release_dir && ../$BUILD_SCRIPT"
+}
+
+function prepare_client()
+{
+	mkdir -p $CLIENT_BUILD_DIR
+	cp $RELEASE_TARBALL $BUILD_SCRIPT $CLIENT_BUILD_DIR
+	cd $CLIENT_BUILD_DIR && tar xf $RELEASE_TARBALL
+	cd $CLIENT_BUILD_DIR/$release_dir && ../$BUILD_SCRIPT
+}
+
+
+CONFIG_FILE=gf_perf_config
+BUILD_SCRIPT=buildit
+source $CONFIG_FILE
+
+if [ "$RELEASE_TARBALL" == "" ]
+then
+	echo "ERROR: Empty release tarball"
+	exit 1
+fi
+
+if [ ! -f $RELEASE_TARBALL ]
+then
+	echo "ERROR: Unable to find source tarball $RELEASE_TARBALL"
+	exit 1
+fi
+
+release_dir=`tar tvf $RELEASE_TARBALL | head -1 | awk '{print $NF}'`
+
+# Build gluster on the bricks
+for brick in `echo $BRICK_IP_ADDRS`
+do
+	echo "Starting build on server $brick..."
+	prepare_server $brick &
+done
+
+echo "Waiting for jobs to finish..."
+sleep 5
+
+# Build gluster on the client
+echo "Starting build on client..."
+prepare_client &
+
+wait

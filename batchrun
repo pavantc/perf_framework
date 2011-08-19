@@ -1,0 +1,31 @@
+#!/bin/bash
+
+RUNLIST="glusterfs-3.2.2qa2.tar.gz"
+
+function do_run()
+{
+	./start_perf_measure
+	sed -i 's/^\.\/create_gluster_vol/#&/' start_perf_measure
+	sleep 10
+	./quota_gsync_run
+	sed -i 's/^#\.\/create_gluster_vol/\.\/create_gluster_vol/' start_perf_measure
+}
+
+for run in $RUNLIST
+do
+	cp tarballs/$run .
+	./setrun $run
+	./deploy_gluster
+	./check_install.new
+        if [ $? -ne 0 ]
+        then
+                echo "Installation of run $run failed. Continuing with next run"
+                continue
+        fi
+	echo "Sleeping for 10 seconds.."
+	runlabel=`echo $run|sed -e 's/^glusterfs-//' -e 's/\.tar\.gz//'`
+	echo "run`cat .runfile` - glusterfs - $runlabel - distributed replicate - ()" >> $RUNLOG
+	sleep 10
+	do_run
+	rm $run
+done

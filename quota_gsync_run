@@ -1,0 +1,38 @@
+#!/bin/bash -u
+
+#volumeid=`ssh -l root 10.1.10.33 "cat /etc/glusterd/vols/testvol/info | grep volume-id|cut -f2 -d'='"`
+
+a=`cat .runfile`
+echo "run$a - Quota off; gsync on..."
+./run killall glusterd glusterfsd glusterfs
+#./run "sed -i 's/option gsync off/option volume-uuid $volumeid\n    &/' /etc/glusterd/vols/testvol/*datastore*"
+./run "sed -i 's/option xtime off/option xtime on/' /etc/glusterd/vols/testvol/*datastore*"
+./run "sed -i 's/option quota on/option quota off/' /etc/glusterd/vols/testvol/*datastore*"
+./run /usr/local/sbin/glusterd
+sleep 5
+./start_perf_measure
+sleep 10
+
+echo "run$((a+1)) - Quota on; gsync on..."
+./run killall glusterd glusterfsd glusterfs
+./run "sed -i 's/option quota off/option quota on/' /etc/glusterd/vols/testvol/*datastore*"
+./run "sed -i 's/option xtime off/option xtime on/' /etc/glusterd/vols/testvol/*datastore*"
+./run /usr/local/sbin/glusterd
+sleep 5
+./start_perf_measure
+sleep 10
+
+echo "run$((a+2)) - Quota on; gsync off..."
+./run killall glusterd glusterfsd glusterfs
+./run "sed -i 's/option xtime on/option xtime off/' /etc/glusterd/vols/testvol/*datastore*"
+./run "sed -i 's/option quota off/option quota on/' /etc/glusterd/vols/testvol/*datastore*"
+./run /usr/local/sbin/glusterd
+sleep 5
+./start_perf_measure
+sleep 10
+
+# Restore
+./run killall glusterd glusterfsd glusterfs
+./run "sed -i 's/option xtime on/option xtime off/' /etc/glusterd/vols/testvol/*datastore*"
+./run "sed -i 's/option quota on/option quota off/' /etc/glusterd/vols/testvol/*datastore*"
+./run /usr/local/sbin/glusterd

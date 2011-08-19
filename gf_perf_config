@@ -1,0 +1,25 @@
+# Common config variables
+RELEASE_TARBALL=glusterfs-3.2.2qa2.tar.gz
+BRICK_IP_ADDRS="10.1.10.33 10.1.10.22 10.1.10.23 10.1.10.28"
+GF_CONFIG="distrep"
+VOLNAME="testvol"
+MGMT_NODE="10.1.10.33"
+
+# Server specific config variables
+SERVER_BUILD_DIR=/data/pavan/gluster_builds
+SERVER_LOG_DIR=/data/pavan/PERF/server_logs
+SERVER_SCRIPTS_DIR=/data/pavan/PERF/scripts
+SERVER_EXPORT_DIR=/data/pavan/datastore
+
+# Client specific config variables
+MOUNT_TYPE="glusterfs"
+# MOUNT_TYPE="nfs"
+MOUNT_POINT=/mnt/perfmount
+LOCAL_LOG_REPO=/root/pavan/test_deploy/log_repo
+CLIENT_BUILD_DIR=/root/pavan/test_deploy/gluster_builds
+CLIENT_IP_ADDR=10.1.10.32
+RUNLOG=$LOCAL_LOG_REPO/runlog
+
+# Special runs
+ENABLE_ACL=yes
+ENABLE_MEM_ACCT=no

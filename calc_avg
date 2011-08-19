@@ -1,0 +1,36 @@
+#!/bin/bash -ue
+
+egrep_patt=""
+
+for run in "$@"
+do
+	egrep_patt+="^`echo run$run\|`"
+	PERFLOG="log_repo/run$run/client/perf-test.log"
+	if [ $run -lt 9 ]
+	then
+		run="0$run"
+	fi
+	echo "RUN$run" > /tmp/run$run.$$
+	echo "-------" >> /tmp/run$run.$$
+        for op in `cat ops`
+        do
+                time=0;
+                for i in `grep -w ^$op $PERFLOG | awk '{print $2}'| cut -f1 -d'.'`
+                do
+                        time=$((time+$i))
+                done;
+                time=$((time/3)) # Average over three runs
+                echo $time >> /tmp/run$run.$$
+        done 
+done
+egrep_patt+="^zzz"
+
+echo ""
+egrep -w "$egrep_patt" log_repo/runlog
+echo ""
+echo "Operations               " > /tmp/tmp_ops.$$
+echo "-------------------------" >> /tmp/tmp_ops.$$
+awk '{ printf("%-25s\n", $0) }' ops >> /tmp/tmp_ops.$$
+
+paste /tmp/tmp_ops.$$ /tmp/run*.$$
+rm /tmp/run*.$$ /tmp/tmp_ops.$$

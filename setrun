@@ -1,0 +1,14 @@
+#!/bin/bash -u
+
+function usage()
+{
+	echo "Usage : $0 <gluster_release_tarball>"
+	exit 1
+}
+
+if [ $# -ne 1 ]
+then
+	usage
+fi
+
+sed -i "s/^RELEASE_TARBALL=.*$/RELEASE_TARBALL=$1/" gf_perf_config
