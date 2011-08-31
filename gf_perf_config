@@ -23,3 +23,9 @@ RUNLOG=$LOCAL_LOG_REPO/runlog
 # Special runs
 ENABLE_ACL=yes
 ENABLE_MEM_ACCT=no
+
+# For passwordless ssh setup
+ROOT_PW1=abc123
+ROOT_PW2=abc321
+# SSH_HOSTS is a space separated list of hosts
+SSH_HOSTS="0"

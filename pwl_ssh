@@ -1,0 +1,51 @@
+#!/usr/bin/expect -f
+
+proc setup_pwl_ssh { host pw1 pw2 } {
+	spawn ssh-copy-id -i /root/.ssh/id_rsa.pub root@$host
+	set timeout 50
+	expect {
+	"yes/no" {
+		send "yes\r" 
+		expect " Warning: Permanently added '*' (RSA) to the list of known hosts.\r\r"
+		exp_continue
+	} "password: " {
+	send "$pw1\r"
+	expect {
+		"#" {
+			# Success. Nothing to do
+		} "password: " {
+			send "$pw2\r";
+			expect {
+			"#" {
+				# Success. Nothing to do
+			} (.*) {
+				catch {close -i $spawn_id}
+				wait -nowait -i $spawn_id
+			}
+			}
+		}
+		}
+	} timeout {
+		catch {close -i $spawn_id}
+		wait -nowait -i $spawn_id
+	} eof {
+	}
+	}
+}
+
+if { $argc < 2 } {
+	puts "usage $argv0 <logfile> <list-of-hosts>"
+	exit
+}
+
+log_user 0
+set logfile [ lindex $argv 0 ]
+exp_log_file -a -noappend $logfile
+
+set pw1 $env(ROOT_PW1)
+set pw2 $env(ROOT_PW2)
+
+for {set i 1} {$i<[llength $argv]} {incr i} {
+	set host [lindex $argv $i]
+	setup_pwl_ssh $host $pw1 $pw2
+}

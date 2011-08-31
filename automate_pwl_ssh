@@ -1,0 +1,43 @@
+#!/bin/bash -u
+
+expect_log=./expectlog
+
+if [ ! -f /root/.ssh/id_rsa.pub ]
+then
+	ssh-keygen -q -t rsa -N "" -f /root/.ssh/id_rsa
+fi
+
+if [ ! -f /usr/bin/expect ]
+then
+	echo "expect not found. Attempting to install..."
+	if grep -i centos /etc/issue > /dev/null 2>&1
+	then
+		echo "CentOS. Using yum"
+		yum install -y `yum whatprovides expect | grep -o "expect.*x86_64"` > /dev/null 2>&1
+		if [ $? -ne 0 ]
+		then
+			echo "Failed installing expect. Exiting..."
+			exit 1
+		fi
+	elif grep -i ubuntu /etc/issue > /dev/null 2>&1
+	then
+		echo "Ubuntu. Using apt-get"
+		apt-get install -y expect > /dev/null 2>&1
+		if [ $? -ne 0 ]
+		then
+			echo "Failed installing expect. Exiting..."
+			exit 1
+		fi
+	else
+		echo "Unknown distribution"
+		echo "Install expect and try again."
+		exit 1
+	fi
+fi
+
+echo "Attempting passwordless ssh setup on multiple hosts."
+echo "log can be found in $expect_log"
+
+export ROOT_PW1
+export ROOT_PW2
+./pwl_ssh $expect_log $SSH_HOSTS
