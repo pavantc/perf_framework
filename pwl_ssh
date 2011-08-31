@@ -6,7 +6,6 @@ proc setup_pwl_ssh { host pw1 pw2 } {
 	expect {
 	"yes/no" {
 		send "yes\r" 
-		expect " Warning: Permanently added '*' (RSA) to the list of known hosts.\r\r"
 		exp_continue
 	} "password: " {
 	send "$pw1\r"
